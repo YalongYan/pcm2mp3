@@ -2,11 +2,21 @@
 <html>
 <head>
     <title>PCM转MP3转换器</title>
-    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script> -->
-    <script src="./lame.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+    <!-- <script src="./lame.min.js"></script> -->
     <style>
         .audio-player {
             margin-top: 20px;
+            display: none;
+        }
+        #analysisResult {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            display: none;
+        }
+        #waveform {
+            margin: 20px 0;
             display: none;
         }
     </style>
@@ -16,12 +26,148 @@
     <input type="file" id="pcmFile" accept=".pcm">
     <button onclick="convertPcmToMp3()">Convert to MP3</button>
     
+    <div id="analysisResult"></div>
+    <canvas id="waveform" width="800" height="200"></canvas>
+    
     <div class="audio-player" id="audioPlayer">
         <h3>转换后的MP3：</h3>
         <audio id="audio" controls></audio>
     </div>
 
     <script>
+        async function analyzePcmData(pcmData) {
+            // 添加PCM文件基本信息检查
+            const fileInfo = document.getElementById('analysisResult');
+            fileInfo.innerHTML += `
+                <h3>PCM文件基本信息:</h3>
+                <p>文件大小: ${pcmData.length * 2} bytes</p>
+                <p>采样点数: ${pcmData.length}</p>
+                <p>采样位数: 16位</p>
+                <p>声道数: 1</p>
+                <p>采样率: 44100Hz</p>
+            `;
+
+            // 检查数据分布
+            let zeroCount = 0;
+            let smallValues = 0; // 绝对值小于100的值
+            let mediumValues = 0; // 绝对值在100-1000之间的值
+            let largeValues = 0; // 绝对值大于1000的值
+            
+            for (let i = 0; i < pcmData.length; i++) {
+                const value = Math.abs(pcmData[i]);
+                if (value === 0) zeroCount++;
+                else if (value < 100) smallValues++;
+                else if (value < 1000) mediumValues++;
+                else largeValues++;
+            }
+            
+            fileInfo.innerHTML += `
+                <h3>数据分布:</h3>
+                <p>零值数量: ${zeroCount} (${(zeroCount/pcmData.length*100).toFixed(2)}%)</p>
+                <p>小值数量: ${smallValues} (${(smallValues/pcmData.length*100).toFixed(2)}%)</p>
+                <p>中值数量: ${mediumValues} (${(mediumValues/pcmData.length*100).toFixed(2)}%)</p>
+                <p>大值数量: ${largeValues} (${(largeValues/pcmData.length*100).toFixed(2)}%)</p>
+            `;
+
+            // 检查数据是否全为0或固定值
+            let isAllZero = true;
+            let isAllSame = true;
+            let firstNonZero = null;
+            
+            for (let i = 0; i < pcmData.length; i++) {
+                if (pcmData[i] !== 0) {
+                    isAllZero = false;
+                    if (firstNonZero === null) {
+                        firstNonZero = pcmData[i];
+                    } else if (pcmData[i] !== firstNonZero) {
+                        isAllSame = false;
+                        break;
+                    }
+                }
+            }
+            
+            fileInfo.innerHTML += `
+                <h3>数据特征:</h3>
+                <p>是否全为0: ${isAllZero}</p>
+                <p>是否全为相同值: ${isAllSame}</p>
+                ${firstNonZero !== null ? `<p>第一个非零值: ${firstNonZero}</p>` : ''}
+            `;
+
+            // 原有的分析代码继续执行
+            let maxVolume = 0;
+            let minVolume = 0;
+            let totalVolume = 0;
+            let nonZeroSamples = 0;
+            
+            // 遍历PCM数据
+            for (let i = 0; i < pcmData.length; i++) {
+                const sample = pcmData[i];
+                maxVolume = Math.max(maxVolume, sample);
+                minVolume = Math.min(minVolume, sample);
+                totalVolume += Math.abs(sample);
+                
+                // 统计非零样本数
+                if (sample !== 0) {
+                    nonZeroSamples++;
+                }
+            }
+            
+            // 计算平均音量
+            const averageVolume = totalVolume / pcmData.length;
+            
+            // 计算非零样本的百分比
+            const nonZeroPercentage = (nonZeroSamples / pcmData.length) * 100;
+            
+            // 输出分析结果
+            const analysisResult = document.getElementById('analysisResult');
+            analysisResult.style.display = 'block';
+            analysisResult.innerHTML = `
+                <h3>PCM数据分析结果:</h3>
+                <p>总样本数: ${pcmData.length}</p>
+                <p>最大音量: ${maxVolume}</p>
+                <p>最小音量: ${minVolume}</p>
+                <p>平均音量: ${averageVolume.toFixed(2)}</p>
+                <p>非零样本数: ${nonZeroSamples}</p>
+                <p>非零样本百分比: ${nonZeroPercentage.toFixed(2)}%</p>
+            `;
+            
+            // 判断是否包含有效声音
+            const hasValidSound = nonZeroPercentage > 1 && maxVolume > 1000;
+            analysisResult.innerHTML += `<p>是否包含有效声音: ${hasValidSound ? '是' : '否'}</p>`;
+            
+            // 绘制波形
+            const canvas = document.getElementById('waveform');
+            canvas.style.display = 'block';
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = 'white';
+            ctx.beginPath();
+            
+            // 绘制波形
+            const step = Math.ceil(pcmData.length / canvas.width);
+            for (let i = 0; i < canvas.width; i++) {
+                const start = i * step;
+                const end = Math.min(start + step, pcmData.length);
+                let sum = 0;
+                for (let j = start; j < end; j++) {
+                    sum += Math.abs(pcmData[j]);
+                }
+                const average = sum / (end - start);
+                const height = (average / 32768) * canvas.height;
+                ctx.moveTo(i, canvas.height / 2 - height / 2);
+                ctx.lineTo(i, canvas.height / 2 + height / 2);
+            }
+            ctx.stroke();
+            
+            return {
+                hasValidSound,
+                maxVolume,
+                averageVolume,
+                nonZeroPercentage
+            };
+        }
+
         function convertPcmToMp3() {
             const fileInput = document.getElementById('pcmFile');
             const file = fileInput.files[0];
@@ -32,23 +178,22 @@
             }
 
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = async function(e) {
                 const pcmData = new Int16Array(e.target.result);
                 
+                // 分析PCM数据
+                const analysis = await analyzePcmData(pcmData);
+                
+                if (!analysis.hasValidSound) {
+                    alert('PCM数据可能不包含有效声音，请检查录音文件');
+                    return;
+                }
+                
                 // Create MP3 encoder
-                // Mp3Encoder 参数说明：
-                // 参数1: 声道数 (1=单声道, 2=立体声)
-                // 参数2: 采样率 (单位: Hz, 常用值: 44100=CD音质, 48000=专业音频)
-                // 参数3: 比特率 (单位: kbps, 常用值: 128=标准音质, 192=高质量, 320=最高质量)
-                const mp3encoder = new lamejs.Mp3Encoder(1, 48000, 128);
+                const mp3encoder = new lamejs.Mp3Encoder(1, 44100, 128);
                 const mp3Data = [];
 
                 // Convert PCM to MP3
-                // sampleBlockSize 设置为 1152 的原因：
-                // 1. MP3 编码的基本单位是帧（frame），每帧包含 1152 个采样点
-                // 2. 1152 是 576 的倍数（1152 = 576 * 2）
-                // 3. 576 是 MP3 编码中的一个重要数值，它代表一个子带（subband）的采样点数
-                // 4. 这个数值是 MP3 标准规定的，不能随意更改
                 const sampleBlockSize = 1152;
                 const mp3buf = new Int8Array(1152);
 
